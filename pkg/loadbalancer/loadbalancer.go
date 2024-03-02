@@ -38,9 +38,14 @@ func (l *LoadBalancer) registerServerHandler(writer http.ResponseWriter, request
 func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Request) {
 	printRequestInformation(request)
 	//
+	if len(l.backends) < 1 {
+		serveInternalError(writer, fmt.Sprintf("[Error] Insufficient servers registered"))
+		return
+	}
 	firstBackend := l.getFirstBackend()
-	fullRequest, err := l.getRequestWithPath(writer, firstBackend)
+	fullRequest, err := l.getRequestWithPath(firstBackend)
 	if err != nil {
+		serveInternalError(writer, fmt.Sprintf("[Error] setup request to %q failed:\n%q", fullRequest, err))
 		return
 	}
 	backendResponse, err := http.Get(fullRequest)
@@ -94,15 +99,10 @@ func printRequestInformation(request *http.Request) {
 	writeHeaders(request)
 }
 
-func (l *LoadBalancer) getRequestWithPath(writer http.ResponseWriter, firstBackend *backend.Backend) (string, error) {
+func (l *LoadBalancer) getRequestWithPath(firstBackend *backend.Backend) (string, error) {
 	fullRequest, err := url.JoinPath(firstBackend.Url, "hello")
 	fmt.Printf("Made request to %q", fullRequest)
-	if err != nil {
-		http.Error(writer, "Server error", http.StatusInternalServerError)
-		fmt.Printf("Error made when joining request to %q and %q", firstBackend.Url, "hello")
-		return "", err
-	}
-	return fullRequest, nil
+	return fullRequest, err
 }
 
 func formatBreak() (int, error) {

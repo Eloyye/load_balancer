@@ -9,7 +9,7 @@ import (
 )
 
 func TestLoadBalancer(t *testing.T) {
-	t.Run("test proxy works", func(t *testing.T) {
+	t.Run("test reverse proxy works", func(t *testing.T) {
 		backendServer := httptest.NewServer(backend.CreateNewBackendServer())
 		defer backendServer.Close()
 		backendURL := backendServer.URL
@@ -20,10 +20,18 @@ func TestLoadBalancer(t *testing.T) {
 		request, _ := http.NewRequest(http.MethodGet, "/", nil)
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
+		assertStatusCode(t, response, http.StatusOK)
 		got := response.Body.String()
 		want := "hello world"
 		assertSameString(t, got, want)
-		assertStatusCode(t, response, http.StatusOK)
+	})
+	t.Run("error when empty backend servers", func(t *testing.T) {
+		backends := []*backend.Backend{}
+		server := loadbalancer.NewLoadBalancer(backends)
+		request, _ := http.NewRequest(http.MethodGet, "/", nil)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		assertStatusCode(t, response, http.StatusInternalServerError)
 	})
 }
 
