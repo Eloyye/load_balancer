@@ -1,6 +1,7 @@
 package loadbalancer
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"loadbalancer/pkg/backend"
@@ -17,7 +18,7 @@ type LoadBalancer struct {
 func NewLoadBalancer(backends []*backend.Backend) *LoadBalancer {
 	lb := new(LoadBalancer)
 	handler := http.NewServeMux()
-	handler.HandleFunc("/", lb.rootHandler)
+	handler.HandleFunc("/hello", lb.rootHandler)
 	handler.HandleFunc("/register", lb.registerServerHandler)
 	lb.Handler = handler
 	lb.backends = backends
@@ -28,11 +29,40 @@ func (l *LoadBalancer) registerServerHandler(writer http.ResponseWriter, request
 	// right now servers can register through post requests
 	switch request.Method {
 	case http.MethodPost:
-
+		err := l.handleRegisterPOST(writer, request)
+		if err != nil {
+			// have already handled error to writer
+			return
+		}
 	default:
 		writer.WriteHeader(http.StatusBadRequest)
 	}
 
+}
+
+func (l *LoadBalancer) handleRegisterPOST(writer http.ResponseWriter, request *http.Request) error {
+	var backendResponse backend.BackendDTA
+	defer request.Body.Close()
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		serveInternalError(writer, fmt.Sprintf("Error reading request body:\n%s", err))
+		return err
+	}
+	err = json.Unmarshal(body, &backendResponse)
+	if err != nil {
+		serveInternalError(writer, fmt.Sprintf("failed to parse json:\n%s", err))
+		return err
+	}
+	registeredBackend := createBackendInfo(backendResponse)
+	l.backends = append(l.backends, registeredBackend)
+	log.Printf("successfully logged server at: %s", backendResponse.ServerURL)
+	return nil
+}
+
+func createBackendInfo(backendResponse backend.BackendDTA) *backend.Backend {
+	registeredBackend := new(backend.Backend)
+	registeredBackend.Url = backendResponse.ServerURL
+	return registeredBackend
 }
 
 func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Request) {
@@ -55,7 +85,7 @@ func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Req
 	}
 
 	if backendResponse.StatusCode != http.StatusOK {
-		serveInternalError(writer, fmt.Sprintf("[Error] GET response from %q yielded incorrect status code %d:\n%q", backendResponse, backendResponse.StatusCode, err))
+		serveInternalError(writer, fmt.Sprintf("[Error] GET response yielded incorrect status code %d:\n%q", backendResponse.StatusCode, err))
 		return
 	}
 
