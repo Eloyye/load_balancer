@@ -9,12 +9,15 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sync"
+	"time"
 )
 
 type LoadBalancer struct {
 	http.Handler
 	backends []*backend.Backend
 	next     int
+	mutex    sync.Mutex
 }
 
 func NewLoadBalancer() *LoadBalancer {
@@ -22,6 +25,7 @@ func NewLoadBalancer() *LoadBalancer {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/hello", lb.rootHandler)
 	handler.HandleFunc("/register", lb.registerServerHandler)
+	// goroutine that handles health checks
 	lb.Handler = handler
 	lb.backends = nil
 	return lb
@@ -56,6 +60,8 @@ func (l *LoadBalancer) handleRegisterPOST(writer http.ResponseWriter, request *h
 		return err
 	}
 	registeredBackend := createBackendInfo(backendResponse)
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	l.backends = append(l.backends, registeredBackend)
 	log.Printf("successfully logged server at: %s", backendResponse.ServerURL)
 	return nil
@@ -64,6 +70,8 @@ func (l *LoadBalancer) handleRegisterPOST(writer http.ResponseWriter, request *h
 func createBackendInfo(backendResponse backend.BackendDTA) *backend.Backend {
 	registeredBackend := new(backend.Backend)
 	registeredBackend.Url = backendResponse.ServerURL
+	registeredBackend.LastChecked = time.Now()
+	registeredBackend.IsDead = false
 	return registeredBackend
 }
 
@@ -71,6 +79,8 @@ func (l *LoadBalancer) getNextBackend() (be *backend.Backend, err error) {
 	if len(l.backends) < 1 {
 		return nil, errors.New("insufficient number of backend servers")
 	}
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	var backendOut *backend.Backend
 	backendOut = l.backends[l.next]
 	for backendOut.IsDead {
@@ -88,7 +98,7 @@ func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Req
 	if err != nil {
 		serveInternalError(writer, fmt.Sprintf("%q", err))
 	}
-	fullRequest, err := l.getRequestWithPath(firstBackend)
+	fullRequest, err := getRequestWithPath(firstBackend)
 	if err != nil {
 		serveInternalError(writer, fmt.Sprintf("[Error] setup request to %q failed:\n%q", fullRequest, err))
 		return
@@ -144,7 +154,7 @@ func printRequestInformation(request *http.Request) {
 	writeHeaders(request)
 }
 
-func (l *LoadBalancer) getRequestWithPath(firstBackend *backend.Backend) (string, error) {
+func getRequestWithPath(firstBackend *backend.Backend) (string, error) {
 	fullRequest, err := url.JoinPath(firstBackend.Url, "hello")
 	fmt.Printf("Made request to %q", fullRequest)
 	return fullRequest, err

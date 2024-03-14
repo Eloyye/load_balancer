@@ -2,3 +2,4 @@
 build/
 # IDE
 .idea/
+/cmd/dummy/
