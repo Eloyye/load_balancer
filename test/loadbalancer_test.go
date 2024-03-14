@@ -10,17 +10,15 @@ import (
 
 func TestLoadBalancer(t *testing.T) {
 	t.Run("error when empty backend servers", func(t *testing.T) {
-		backends := []*backend.Backend{}
-		server := loadbalancer.NewLoadBalancer(backends)
+		server := loadbalancer.NewLoadBalancer()
 		response := requestHelloWorld(server)
 		assertStatusCode(t, response, http.StatusInternalServerError)
 	})
 	t.Run("creating a backend server will automatically add backend to load balancer", func(t *testing.T) {
-		backends := []*backend.Backend{}
-		server := httptest.NewServer(loadbalancer.NewLoadBalancer(backends))
+		server := httptest.NewServer(loadbalancer.NewLoadBalancer())
 		defer server.Close()
 		lbURL := server.URL
-		backendServer := setupBackendServer(lbURL)
+		backendServer := setupBackendServer(lbURL, ":8081")
 		defer backendServer.Close()
 	})
 }
@@ -32,8 +30,8 @@ func requestHelloWorld(server *loadbalancer.LoadBalancer) *httptest.ResponseReco
 	return response
 }
 
-func setupBackendServer(lbURL string) *httptest.Server {
-	return httptest.NewServer(backend.CreateNewBackendServer(lbURL))
+func setupBackendServer(lbURL, port string) *httptest.Server {
+	return httptest.NewServer(backend.CreateNewBackendServer(lbURL, port))
 }
 
 func assertStatusCode(t *testing.T, response *httptest.ResponseRecorder, expectedStatusCode int) {

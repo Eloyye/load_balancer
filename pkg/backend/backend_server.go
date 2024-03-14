@@ -17,57 +17,61 @@ type BackendServer struct {
 	http.Handler
 }
 
-func CreateNewBackendServer(lbURL, port string) *BackendServer {
+func CreateNewBackendServer(lbURL, port string) (*BackendServer, error) {
 	backendServer := new(BackendServer)
 	router := http.NewServeMux()
 	router.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "hello world")
+		log.Println("Reached /hello")
+		_, err := fmt.Fprint(w, "hello world")
+		if err != nil {
+			log.Println(err)
+			w.WriteHeader(http.StatusBadRequest)
+		}
 	})
 	backendServer.Handler = router
 	if lbURL != "" {
 		backendServer.loadbalancerURL = lbURL
 		backendServer.port = port
-		backendServer.setup()
+		err := backendServer.setup()
+		if err != nil {
+			return nil, err
+		}
 	}
-	return backendServer
+	return backendServer, nil
 }
 
 type BackendDTA struct {
 	ServerURL string
 }
 
-func (b *BackendServer) setup() {
+func (b *BackendServer) setup() error {
 	// Example: Extract server URL (you'll get the actual port here)
 	listener, err := net.Listen("tcp", b.port)
 	if err != nil {
-		log.Fatal("Error getting server address:", err)
-		return
+		return err
 	}
 	serverURL := "http://" + listener.Addr().String()
 	listener.Close() // Close the listener; we're just getting the address
 	backendDta := BackendDTA{ServerURL: serverURL}
 	json, err := json2.Marshal(backendDta)
 	if err != nil {
-		log.Fatal("Error marshalling json:", err)
-		return
+		return err
 	}
 	log.Println("Server URL:", serverURL)
 	b.ServerURL = serverURL
 
 	pathToRegister, err := url.JoinPath(b.loadbalancerURL, "register")
 	if err != nil {
-		log.Fatalf("Error with joining path:", err)
-		return
+		return err
 	}
 	log.Printf("sent register request to %s", pathToRegister)
 	response, err := http.Post(pathToRegister, "application/json", bytes.NewReader(json))
 	if err != nil {
-		log.Fatalf("Error with POST request to Load Balancer:", err)
-		return
+		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		log.Fatalf("Error, expected status code %d response but got status code %d:\n%s", http.StatusOK, response.StatusCode, err)
-		return
+		return err
 	}
 	log.Println("Successfully registered to load balancer")
+	return nil
 }

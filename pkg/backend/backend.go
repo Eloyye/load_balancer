@@ -1,5 +1,6 @@
 package backend
 
 type Backend struct {
-	Url string
+	Url    string
+	IsDead bool
 }

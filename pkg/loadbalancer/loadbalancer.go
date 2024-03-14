@@ -2,6 +2,7 @@ package loadbalancer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"loadbalancer/pkg/backend"
@@ -13,15 +14,16 @@ import (
 type LoadBalancer struct {
 	http.Handler
 	backends []*backend.Backend
+	next     int
 }
 
-func NewLoadBalancer(backends []*backend.Backend) *LoadBalancer {
+func NewLoadBalancer() *LoadBalancer {
 	lb := new(LoadBalancer)
 	handler := http.NewServeMux()
 	handler.HandleFunc("/hello", lb.rootHandler)
 	handler.HandleFunc("/register", lb.registerServerHandler)
 	lb.Handler = handler
-	lb.backends = backends
+	lb.backends = nil
 	return lb
 }
 
@@ -65,14 +67,27 @@ func createBackendInfo(backendResponse backend.BackendDTA) *backend.Backend {
 	return registeredBackend
 }
 
+func (l *LoadBalancer) getNextBackend() (be *backend.Backend, err error) {
+	if len(l.backends) < 1 {
+		return nil, errors.New("insufficient number of backend servers")
+	}
+	var backendOut *backend.Backend
+	backendOut = l.backends[l.next]
+	for backendOut.IsDead {
+		l.next = (l.next + 1) % len(l.backends)
+		backendOut = l.backends[l.next]
+	}
+	l.next = (l.next + 1) % len(l.backends)
+	return backendOut, nil
+}
+
 func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Request) {
 	printRequestInformation(request)
 	//
-	if len(l.backends) < 1 {
-		serveInternalError(writer, fmt.Sprintf("[Error] Insufficient servers registered"))
-		return
+	firstBackend, err := l.getNextBackend()
+	if err != nil {
+		serveInternalError(writer, fmt.Sprintf("%q", err))
 	}
-	firstBackend := l.getFirstBackend()
 	fullRequest, err := l.getRequestWithPath(firstBackend)
 	if err != nil {
 		serveInternalError(writer, fmt.Sprintf("[Error] setup request to %q failed:\n%q", fullRequest, err))

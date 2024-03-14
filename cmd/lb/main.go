@@ -9,7 +9,7 @@ import (
 
 func main() {
 	// TODO
-	lb := loadbalancer.NewLoadBalancer(nil)
+	lb := loadbalancer.NewLoadBalancer()
 	PORT := ":8080"
 	fmt.Printf("Listening on port %s\n", PORT)
 	if err := http.ListenAndServe(PORT, lb); err != nil {
