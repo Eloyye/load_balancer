@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"loadbalancer/pkg/backend"
+	"loadbalancer/pkg/utils"
 	"log"
 	"net/http"
 	"net/url"
@@ -28,7 +29,88 @@ func NewLoadBalancer() *LoadBalancer {
 	// goroutine that handles health checks
 	lb.Handler = handler
 	lb.backends = nil
+	go func(lb *LoadBalancer) {
+		// change this later
+		// waiting for some event response to start doing health checks
+		// have at least one server before starting the goroutine
+		duration := 3 * time.Second
+		timeout := 5 * time.Second
+		maxTries := 1
+		indexDeadServers := []int{}
+		t := time.NewTicker(duration)
+		for {
+			// send for every duration
+			for range t.C {
+				lb.sendHealthCheckToBackends(timeout, maxTries, indexDeadServers)
+			}
+		}
+	}(lb)
 	return lb
+}
+
+func (lb *LoadBalancer) sendHealthCheckToBackends(timeout time.Duration, maxTries int, indexDeadServers []int) {
+	lb.mutex.Lock()
+	defer lb.mutex.Unlock()
+	for i, be := range lb.backends {
+		go func(be *backend.Backend, i int) {
+			be.Mutex.Lock()
+			defer be.Mutex.Unlock()
+			if be.IsDead && be.ReviveAttempts >= maxTries {
+				indexDeadServers = append(indexDeadServers, i)
+				return
+			}
+			toURI, err := url.JoinPath(be.Url, "health")
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			client := http.Client{
+				Timeout: timeout,
+			}
+			log.Printf("sending health check to %s", be.Url)
+			get, err := client.Get(toURI)
+			if err != nil {
+				log.Println(err)
+				be.IsDead = true
+				be.ReviveAttempts += 1
+				return
+			}
+
+			contents, err := io.ReadAll(get.Body)
+			defer func(Body io.ReadCloser) {
+				err = Body.Close()
+				if err != nil {
+					log.Println(err)
+				}
+			}(get.Body)
+			if err != nil {
+				log.Println(err)
+				err = get.Body.Close()
+				if err != nil {
+					log.Println(err)
+				}
+				return
+			}
+
+			var healthCheckMessage utils.HealthCheckMessage
+			err = json.Unmarshal(contents, &healthCheckMessage)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			log.Printf("health check success for %s\n", be.Url)
+			be.IsDead = false
+			be.ReviveAttempts = 0
+		}(be, i)
+	}
+	if len(indexDeadServers) > 0 {
+		lb.mutex.Lock()
+		for _, i := range indexDeadServers {
+			lb.backends = append(lb.backends[:i], lb.backends[i+1:]...)
+		}
+		lb.mutex.Unlock()
+	}
 }
 
 func (l *LoadBalancer) registerServerHandler(writer http.ResponseWriter, request *http.Request) {
@@ -70,7 +152,7 @@ func (l *LoadBalancer) handleRegisterPOST(writer http.ResponseWriter, request *h
 func createBackendInfo(backendResponse backend.BackendDTA) *backend.Backend {
 	registeredBackend := new(backend.Backend)
 	registeredBackend.Url = backendResponse.ServerURL
-	registeredBackend.LastChecked = time.Now()
+	registeredBackend.ReviveAttempts = 0
 	registeredBackend.IsDead = false
 	return registeredBackend
 }
@@ -113,6 +195,11 @@ func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Req
 		serveInternalError(writer, fmt.Sprintf("[Error] GET response yielded incorrect status code %d:\n%q", backendResponse.StatusCode, err))
 		return
 	}
+
+	firstBackend.Mutex.Lock()
+	firstBackend.IsDead = false
+	firstBackend.ReviveAttempts = 0
+	firstBackend.Mutex.Unlock()
 
 	defer closeBodyResponse(writer, backendResponse) // Ensure the response body is closed
 
@@ -158,10 +245,6 @@ func getRequestWithPath(firstBackend *backend.Backend) (string, error) {
 	fullRequest, err := url.JoinPath(firstBackend.Url, "hello")
 	fmt.Printf("Made request to %q", fullRequest)
 	return fullRequest, err
-}
-
-func formatBreak() (int, error) {
-	return fmt.Println("===================================")
 }
 
 func writeHeaders(request *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	json2 "encoding/json"
 	"fmt"
+	"loadbalancer/pkg/utils"
 	"log"
 	"net"
 	"net/http"
@@ -26,6 +27,17 @@ func CreateNewBackendServer(lbURL, port string) (*BackendServer, error) {
 		if err != nil {
 			log.Println(err)
 			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	router.HandleFunc("/health", func(writer http.ResponseWriter, request *http.Request) {
+		log.Println("Health Checking")
+		message := utils.HealthCheckMessage{
+			Message: "health",
+		}
+		err := json2.NewEncoder(writer).Encode(message)
+		if err != nil {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
 		}
 	})
 	backendServer.Handler = router

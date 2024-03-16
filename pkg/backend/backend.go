@@ -1,9 +1,12 @@
 package backend
 
-import "time"
+import (
+	"sync"
+)
 
 type Backend struct {
-	Url         string
-	IsDead      bool
-	LastChecked time.Time
+	Url            string
+	IsDead         bool
+	Mutex          sync.Mutex
+	ReviveAttempts int
 }
