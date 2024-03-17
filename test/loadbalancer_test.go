@@ -18,7 +18,10 @@ func TestLoadBalancer(t *testing.T) {
 		server := httptest.NewServer(loadbalancer.NewLoadBalancer())
 		defer server.Close()
 		lbURL := server.URL
-		backendServer := setupBackendServer(lbURL, ":8081")
+		backendServer, err := setupBackendServer(lbURL, ":8081")
+		if err != nil {
+			t.Errorf("%s", err)
+		}
 		defer backendServer.Close()
 	})
 }
@@ -30,8 +33,12 @@ func requestHelloWorld(server *loadbalancer.LoadBalancer) *httptest.ResponseReco
 	return response
 }
 
-func setupBackendServer(lbURL, port string) *httptest.Server {
-	return httptest.NewServer(backend.CreateNewBackendServer(lbURL, port))
+func setupBackendServer(lbURL, port string) (*httptest.Server, error) {
+	server, err := backend.CreateNewBackendServer(lbURL, port)
+	if err != nil {
+		return nil, err
+	}
+	return httptest.NewServer(server), err
 }
 
 func assertStatusCode(t *testing.T, response *httptest.ResponseRecorder, expectedStatusCode int) {

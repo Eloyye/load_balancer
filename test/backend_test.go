@@ -8,7 +8,10 @@ import (
 )
 
 func TestBackend(t *testing.T) {
-	server := backend.CreateNewBackendServer("", ":8081")
+	server, err := backend.CreateNewBackendServer("", ":8081")
+	if err != nil {
+		t.Error("did not create backend server")
+	}
 	request, _ := http.NewRequest(http.MethodGet, "/hello", nil)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)

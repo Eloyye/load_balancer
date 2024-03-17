@@ -35,7 +35,7 @@ func NewLoadBalancer() *LoadBalancer {
 		// have at least one server before starting the goroutine
 		duration := 3 * time.Second
 		timeout := 5 * time.Second
-		maxTries := 1
+		maxTries := 3
 		indexDeadServers := []int{}
 		t := time.NewTicker(duration)
 		for {
@@ -107,6 +107,7 @@ func (lb *LoadBalancer) sendHealthCheckToBackends(timeout time.Duration, maxTrie
 	if len(indexDeadServers) > 0 {
 		lb.mutex.Lock()
 		for _, i := range indexDeadServers {
+			log.Printf("removed %s as valid backends\n", lb.backends[i].Url)
 			lb.backends = append(lb.backends[:i], lb.backends[i+1:]...)
 		}
 		lb.mutex.Unlock()
@@ -175,7 +176,10 @@ func (l *LoadBalancer) getNextBackend() (be *backend.Backend, err error) {
 
 func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Request) {
 	printRequestInformation(request)
-	//
+	if len(l.backends) < 1 {
+		serveInternalError(writer, fmt.Sprintf("There are no backends to serve"))
+		return
+	}
 	firstBackend, err := l.getNextBackend()
 	if err != nil {
 		serveInternalError(writer, fmt.Sprintf("%q", err))

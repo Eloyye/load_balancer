@@ -1,0 +1,1 @@
+go run cmd/lb/main.go & go run cmd/be/main.go 8081 & go run cmd/be/main.go 8082

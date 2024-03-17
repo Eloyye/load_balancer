@@ -2,6 +2,7 @@ package main
 
 import (
 	"loadbalancer/pkg/backend"
+	"loadbalancer/pkg/utils"
 	"log"
 	"net/http"
 	"os"
@@ -19,7 +20,7 @@ func main() {
 		PortNumber = argsWithoutProg[0]
 	}
 
-	PORT := formatPort(PortNumber)
+	PORT := utils.FormatPort(PortNumber)
 
 	// initialize backend server
 	be, err := backend.CreateNewBackendServer(loadBalancerURL, PORT)
@@ -32,11 +33,6 @@ func main() {
 	if err != nil {
 		failStartup(err)
 	}
-}
-
-func formatPort(PortNumber string) string {
-	PORT := ":" + PortNumber
-	return PORT
 }
 
 func failStartup(err error) {
