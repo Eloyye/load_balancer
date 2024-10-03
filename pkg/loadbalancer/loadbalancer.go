@@ -33,30 +33,48 @@ func NewLoadBalancer() *LoadBalancer {
 		// change this later
 		// waiting for some event response to start doing health checks
 		// have at least one server before starting the goroutine
-		duration := 3 * time.Second
+		duration := 1 * time.Second
 		timeout := 5 * time.Second
-		maxTries := 3
+		maxTries := 1
 		indexDeadServers := []int{}
 		t := time.NewTicker(duration)
-		for {
-			// send for every duration
-			for range t.C {
-				lb.sendHealthCheckToBackends(timeout, maxTries, indexDeadServers)
+		//for {
+		// send for every duration
+		for range t.C {
+			lb.sendHealthCheckToBackends(timeout, maxTries, &indexDeadServers)
+			log.Printf("TOP LEVEL: size of indexDeadServers: %d", len(indexDeadServers))
+			if len(indexDeadServers) > 0 {
+				for _, i := range indexDeadServers {
+					lb.mutex.Lock()
+					log.Printf("removed %s as valid backends\n", lb.backends[i].Url)
+					lb.backends = append(lb.backends[:i], lb.backends[i+1:]...)
+					lb.mutex.Unlock()
+				}
+				indexDeadServers = []int{}
 			}
 		}
+		//}
 	}(lb)
 	return lb
 }
 
-func (lb *LoadBalancer) sendHealthCheckToBackends(timeout time.Duration, maxTries int, indexDeadServers []int) {
+func (lb *LoadBalancer) sendHealthCheckToBackends(timeout time.Duration, maxTries int, indexDeadServers *[]int) {
 	lb.mutex.Lock()
 	defer lb.mutex.Unlock()
 	for i, be := range lb.backends {
-		go func(be *backend.Backend, i int) {
+		go func(be *backend.Backend, i int, indexDeadServers *[]int) {
 			be.Mutex.Lock()
 			defer be.Mutex.Unlock()
+			if be.IsMarkedForRemoval {
+				return
+			}
 			if be.IsDead && be.ReviveAttempts >= maxTries {
-				indexDeadServers = append(indexDeadServers, i)
+				log.Println("one dead server added")
+				*indexDeadServers = append(*index`DeadServers, i)
+				log.Printf("size of indexDeadServers: %d", len(*indexDeadServers))
+				log.Printf("added index: %d", i)
+				log.Printf("lb_size: %d", len(lb.backends))
+				be.IsMarkedForRemoval = true
 				return
 			}
 			toURI, err := url.JoinPath(be.Url, "health")
@@ -102,15 +120,7 @@ func (lb *LoadBalancer) sendHealthCheckToBackends(timeout time.Duration, maxTrie
 			log.Printf("health check success for %s\n", be.Url)
 			be.IsDead = false
 			be.ReviveAttempts = 0
-		}(be, i)
-	}
-	if len(indexDeadServers) > 0 {
-		lb.mutex.Lock()
-		for _, i := range indexDeadServers {
-			log.Printf("removed %s as valid backends\n", lb.backends[i].Url)
-			lb.backends = append(lb.backends[:i], lb.backends[i+1:]...)
-		}
-		lb.mutex.Unlock()
+		}(be, i, indexDeadServers)
 	}
 }
 
@@ -159,11 +169,11 @@ func createBackendInfo(backendResponse backend.BackendDTA) *backend.Backend {
 }
 
 func (l *LoadBalancer) getNextBackend() (be *backend.Backend, err error) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	if len(l.backends) < 1 {
 		return nil, errors.New("insufficient number of backend servers")
 	}
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
 	var backendOut *backend.Backend
 	backendOut = l.backends[l.next]
 	for backendOut.IsDead {
@@ -180,19 +190,17 @@ func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Req
 		serveInternalError(writer, fmt.Sprintf("There are no backends to serve"))
 		return
 	}
-	firstBackend, err := l.getNextBackend()
+	firstBackend, err, fullRequest := l.getNextServerBackendPath(writer)
 	if err != nil {
-		serveInternalError(writer, fmt.Sprintf("%q", err))
-	}
-	fullRequest, err := getRequestWithPath(firstBackend)
-	if err != nil {
-		serveInternalError(writer, fmt.Sprintf("[Error] setup request to %q failed:\n%q", fullRequest, err))
 		return
 	}
 	backendResponse, err := http.Get(fullRequest)
-	if err != nil {
-		serveInternalError(writer, fmt.Sprintf("[Error] GET request to %q failed:\n%q", fullRequest, err))
-		return
+	for err != nil {
+		firstBackend, err, fullRequest = l.getNextServerBackendPath(writer)
+		if err != nil {
+			return
+		}
+		backendResponse, err = http.Get(fullRequest)
 	}
 
 	if backendResponse.StatusCode != http.StatusOK {
@@ -211,6 +219,20 @@ func (l *LoadBalancer) rootHandler(writer http.ResponseWriter, request *http.Req
 	if err != nil {
 		serveInternalError(writer, fmt.Sprintf("[Error] Could not read response body:\n%s", err))
 	}
+}
+
+func (l *LoadBalancer) getNextServerBackendPath(writer http.ResponseWriter) (*backend.Backend, error, string) {
+	firstBackend, err := l.getNextBackend()
+	if err != nil {
+		serveInternalError(writer, fmt.Sprintf("%q", err))
+		return nil, err, ""
+	}
+	fullRequest, err := getRequestWithPath(firstBackend)
+	if err != nil {
+		serveInternalError(writer, fmt.Sprintf("[Error] setup request to %q failed:\n%q", fullRequest, err))
+		return nil, err, ""
+	}
+	return firstBackend, nil, fullRequest
 }
 
 func readResponseBody(writer http.ResponseWriter, backendResponse *http.Response) error {
